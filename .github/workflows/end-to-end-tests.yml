@@ -6,8 +6,8 @@ on:
   - push
   - workflow_call
 jobs:
-  web-component-suites:
-    name: Web-Component tests and utilities verification
+  run-tests:
+    name: Web-Component and Studio-web spec tests, utilities verification, etc.
     runs-on: ubuntu-latest
     # Stop the occasional rogue instance before the 6h GitHub limit
     timeout-minutes: 15
@@ -20,8 +20,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
       - name: Install everything
-        run: npm install
+        run: npm ci
 
       - name: Automated license checking
         env:
@@ -32,7 +33,7 @@ jobs:
           npx license-checker --summary --production --onlyAllow "$PROD_LICENSES" --excludePackages "$OK_BUT_NOT_AUTODETECTED"
           npx license-checker --summary --onlyAllow "$DEV_LICENSES;$PROD_LICENSES" --excludePackages "$OK_BUT_NOT_AUTODETECTED"
 
-      - name: Cypress run for web-component
+      - name: Run Cypress tests for web-component
         uses: cypress-io/github-action@v6
         with:
           install: false
@@ -41,11 +42,18 @@ jobs:
             npx nx serve-test-data web-component
           wait-on: sleep 15 # there is no reliable URL to wait for...
           command: npx nx test:once web-component
+
+      - name: Ng spec tests for studio-web
+        run: |
+          npx nx build web-component
+          npx nx test:once studio-web
+
       - name: Check that i18n and l10n are up to date
         run: |
           npx nx extract-i18n studio-web
           if diff -w <(git show HEAD:packages/studio-web/src/i18n/messages.json | sort) <(sort < packages/studio-web/src/i18n/messages.json); then echo OK: The i18n database is up to date.; else echo ERROR: The i18n database is out of date.; npx nx check-l10n studio-web || echo ERROR: The l10n databases are also out of date.; false; fi
           if npx nx check-l10n studio-web; then echo OK: The l10n databases are up to date.; else echo ERROR: An l10n database is out of date.; false; fi
+
       - name: make sure the WP plugin zip file is in sync
         run: |
           cd packages/web-component/wordpress-plugin
@@ -54,12 +62,14 @@ jobs:
             echo The zipped WordPress plugin packages/web-component/wordpress-plugin/read-along-web-app-loader.zip is out of date.; \
             false; \
           fi
+
       - name: make sure bundling works
         shell: bash
         run: |
           npx nx bundle web-component
           git status
           git diff --word-diff=porcelain --word-diff-regex=... --color | perl -ple 's/^(\x1b[^ -+]{0,6})? (.{81,})$/$1 . " " . substr($2, 0, 40) . " [... " . (length($2)-80) . " bytes ...] " . substr($2, -40)/ex'
+
   studio-e2e-tests:
     name: Studio Web test-suites
     timeout-minutes: 60
@@ -83,13 +93,7 @@ jobs:
           # wait for the API to be up
           curl --retry 20 --retry-delay 1 --retry-all-errors http://localhost:8000/api/v1/langs
       - name: Install everything
-        run: npm install
-      - name: Install dependencies
         run: npm ci
-      - name: Ng test for studio-web
-        run: |
-          npx nx build web-component
-          npx nx test:once studio-web
       - name: Run studio-web in the background
         run: |
           npx nx build web-component
@@ -109,6 +113,7 @@ jobs:
           name: blob-report-${{ matrix.shardIndex }}
           path: packages/studio-web/blob-report
           retention-days: 1
+
   merge-reports:
     # Merge reports after playwright-tests, even if some shards have failed
     if: ${{ !cancelled() }}
@@ -121,8 +126,6 @@ jobs:
         with:
           node-version: lts/*
       - name: Install everything
-        run: npm install
-      - name: Install dependencies
         run: npm ci
       - name: Install playwright
         run: npx playwright install
